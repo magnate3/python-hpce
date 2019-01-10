@@ -4,30 +4,28 @@
 from __future__ import print_function
 import os
 import sys
+import fcntl
 import json
 import linkstate_sockcli
 
 PATH = 'dat/ted.json'
 
 
-def check_ted(linkstate, addr):
-    '''check TED'''
-
-    if os.path.exists(PATH):
-        with open(PATH, 'r') as f:
-            ted = json.load(f)
-
-        if linkstate == ted[addr[0]]:
-            return 0
-
-    return -1
-
-
 def update_ted(linkstate, addr):
     '''update TED'''
 
+    if os.path.exists(PATH):
+        with open(PATH, 'r') as f:
+            try:
+                ted = json.load(f)
+            except ValueError:
+                ted = {}
+    else:
+        ted = {}
+
     with open(PATH, 'w') as f:
-        json.dump({addr[0]: linkstate}, f)
+        ted[addr[0]] = linkstate
+        json.dump(ted, f)
 
     return
 
@@ -35,36 +33,27 @@ def update_ted(linkstate, addr):
 def manager(addr, linkstate, is_underpce):
     '''main of TED manager'''
 
-    # fork (Hierarchical SR-PCE)
+    # Add linkstate to TED
+    update_ted(linkstate, addr)
+    print('[Link State] Update TED from {}'.format(addr[0]), file=sys.stderr)
+
+    # if Hierarchical SR-PCE, read TED and send to upper SR-PCE
     if is_underpce:
-        pid = os.fork()
-        if pid == 0:
-            # Child process: Call linkstate_sockcli (Send linkstate to Upper PCE)
-            linkstate_sockcli.lsocket(linkstate)
 
-        elif pid > 0:
-            # Parent process: Recode linkstate to TED
-            ret = check_ted(linkstate, addr)
-            # TED entry is not exist
-            if ret != 0:
-                # Add linkstate to TED
-                update_ted(linkstate, addr)
-                print('[Link State] Update TED information from {}'.format(
-                    addr[0]), file=sys.stderr)
-            # Wait child process
-            os.wait()
+        if os.path.exists(PATH):
+            with open(PATH, 'r') as f:
+                try:
+                    ted = json.load(f)
+                except ValueError:
+                    ted = {}
         else:
-            # fork error
-            print('[Link State] fork failed'.format(addr[0]), file=sys.stderr)
+            ted = {}
 
-    # General PCE
-    else:
-        ret = check_ted(linkstate, addr)
-        # TED entry is not exist
-        if ret != 0:
-            # Add linkstate to TED
-            update_ted(linkstate, addr)
-            print('[Link State] Update TED information from {}'.format(
-                addr[0]), file=sys.stderr)
+        linkstate = []
+            for i in ted.values():
+                linkstate += i
+
+        linkstate_sockcli.lsocket(linkstate)
+
 
     return

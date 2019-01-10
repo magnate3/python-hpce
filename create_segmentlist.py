@@ -184,7 +184,6 @@ def path_verification(src, via, info_graph, policy, lsalist):
     '''convert CSPF path to segmentlist'''
 
     segmentlist = []
-    nexthop = ''
 
     # パスを経由ごとに分解し経路計算
     for i in range(len(via)):
@@ -195,10 +194,19 @@ def path_verification(src, via, info_graph, policy, lsalist):
 
         # next hopを記録
         if i == 0:
-            # Convert nexthop to nextaddress，あとで直す
-            for j in lsalist[constrained_path[1]][1].keys():
-                if lsalist[constrained_path[1]][1][j][0] in lsalist[constrained_path[0]][1]:
-                    nexthop = lsalist[constrained_path[1]][1][j][0]
+            for j in lsalist[constrained_path[1]][1].values():
+                if j[0] in lsalist[constrained_path[0]][1]:
+                    nexthop = j[0]
+
+        # 前からサーチ，制約付き最短経路にサブドメイン超えが含まれていた場合
+        for j in range(len(constrained_path)-1):
+            if isinterdomain(constrained_path[j], constrained_path[j+1]):
+                # それ以前とそれ以降に分割し，以前を処理
+
+                # サブドメイン越えを付加
+
+                # 以降をまたサブドメイン越え無いかそれぞれ処理
+
 
         shortest_path = dijkstra(src, via[i], info_graph)
 
@@ -210,6 +218,11 @@ def path_verification(src, via, info_graph, policy, lsalist):
         else:
             # 直接Node SIDを追加
             segmentlist.append(lsalist[via[i]][0])
+
+
+    # remove first SID is nexthop Node or Adjacency SID, remove it
+    if lsalist[segmentlist[0]] == nexthop or lsalist[segmentlist[0]] == nexthop:
+        segmentlist.pop(0)
 
     # convert segmentlist format [16000, 16001] to '16000/16001'
     segmentlist_stack = ''
@@ -248,7 +261,3 @@ def create_sl(src, dst, via, policy, linkstate):
     sl_info = {'src': src, 'dst': dst, 'nexthop': nexthop,
                'segmentlist': segmentlist_stack}
     return (sl_info)
-
-
-if __name__ == '__main__':
-    create_segmentlist()
