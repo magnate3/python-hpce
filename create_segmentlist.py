@@ -211,12 +211,14 @@ def create_segmentlist(src, dst, info_graph, lsalist, constrained_path):
             shortest_path = dijkstra(src, constrained_path[i], info_graph)
 
             # 制約付き最短経路が最短経路と異なる場合はNode SIDで直接指定不可
-            if constrained_path[:i+1] != shortest_path:
-                # 迂回路のセグメントリストを構築し追記
-                segmentlist += retour(src, constrained_path[i], info_graph, constrained_path[:i], lsalist)
-            else:
-                # 直接Node SIDを追加
-                segmentlist.append(lsalist[constrained_path[i]][0])
+            # サブドメインのエッジノードにいない場合はそこまで移動
+            if constrained_path[i] != src:
+                if constrained_path[:i+1] != shortest_path:
+                    # 迂回路のセグメントリストを構築し追記
+                    segmentlist += retour(src, constrained_path[i], info_graph, constrained_path[:i], lsalist)
+                else:
+                    # 直接Node SIDを追加
+                    segmentlist.append(lsalist[constrained_path[i]][0])
 
             # サブドメイン越えのAdj SIDを付加
             # segmentlist.append(lsalist[constrained_path[i]][2][constrained_path[i+1]])
