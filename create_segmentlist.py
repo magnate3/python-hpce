@@ -44,6 +44,9 @@ def construct_lsalist(linkstate):
             else:
                 lsalist[linkstate[i].get('Advertising Router')][1][linkstate[i].get('Extended Link TLV')[2].get('Link ID')][1]\
                     = linkstate[i].get('LAN-Adj-SID Sub-TLV')[5].get('Label')
+            if linkstate[i].get('Inter SR Subdomain') == 'True':
+                lsalist[linkstate[i].get('Advertising Router')][1][linkstate[i].get(
+                    'Extended Link TLV')[2].get('Link ID')].append('intersubdomain')
 
     for i in range(len(linkstate)):
         if linkstate[i].get('Opaque-Type') == 1:
@@ -69,9 +72,13 @@ def construct_graph(lsalist):
         for j in range(i + 1, len(list_keys)):
             for k in lsalist[list_keys[i]][1]:
                 if k in lsalist[list_keys[j]][1]:
+                    intersubdomain = False
+                    if 'intersubdomain' in lsalist[list_keys[i]][1].get(k):
+                        intersubdomain = True
                     graph.append([list_keys[i], list_keys[j],
-                                  lsalist[list_keys[i]][1].get(k)[2]])
+                                  lsalist[list_keys[i]][1].get(k)[2], k, intersubdomain])
 
+    print(graph)
     return graph
 
 
@@ -170,7 +177,7 @@ def retour(src, dst, info_graph, constrained_path, lsalist):
                 return retour_list
 
     # 一個前でも最短経路でないならば，そこへのAdj SIDをsegmentlistにappend
-    retour_list.append(lsalist[src][2][constrained_path[1]])
+    retour_list.append(lsalist[src][1][constrained_path[1]])
     # 隣接ノードがdstでないならば
     if constrained_path[1] != dst:
         # 一つ先からもう一度検索
@@ -180,49 +187,100 @@ def retour(src, dst, info_graph, constrained_path, lsalist):
     return retour_list
 
 
-def path_verification(src, via, info_graph, policy, lsalist):
+def check_interdomain(node_a, node_b, info_graph):
+
+    isinterdomain = False
+
+    print('Start check: {}, {}'.format(node_a, node_b))
+    for i in info_graph:
+        if node_a in i and node_b in i:
+            if i[5] == True:
+                isinterdomain = True
+
+    return isinterdomain
+
+def create_segmentlist(src, dst, info_graph, lsalist, constrained_path):
     '''convert CSPF path to segmentlist'''
 
     segmentlist = []
 
+    # 前からサーチ，制約付き最短経路にサブドメイン超えが含まれていた場合
+    for i in range(len(constrained_path)-1):
+        if check_interdomain(constrained_path[i], constrained_path[i+1], info_graph):
+            # それ以前とそれ以降に分割し処理
+            shortest_path = dijkstra(src, constrained_path[i], info_graph)
+
+            # 制約付き最短経路が最短経路と異なる場合はNode SIDで直接指定不可
+            if constrained_path[:i+1] != shortest_path:
+                # 迂回路のセグメントリストを構築し追記
+                segmentlist += retour(src, constrained_path[i], info_graph, constrained_path[:i], lsalist)
+            else:
+                # 直接Node SIDを追加
+                segmentlist.append(lsalist[constrained_path[i]][0])
+
+            # サブドメイン越えのAdj SIDを付加
+            # segmentlist.append(lsalist[constrained_path[i]][2][constrained_path[i+1]])
+            for j in info_graph:
+                if (constrained_path[i] == j[0] or constrained_path[i+1] == j[0]) and (constrained_path[i] == j[1] or constrained_path[i+1] == j[1]):
+                    segmentlist.append(lsalist[constrained_path[i]][1][j[4]][1])
+
+            # それ以降があれば
+            if constrained_path[i+1] != dst:
+                # 以降をまたサブドメイン越えが無いか処理，セグメントリストに追加
+                segmentlist += create_segmentlist(constrained_path[i+1], dst, info_graph, lsalist, constrained_path[i+1:])
+
+            return segmentlist
+
+    # サブドメイン越えがなかった場合
+    shortest_path = dijkstra(src, dst, info_graph)
+
+    # 制約付き最短経路が最短経路と異なる場合はNode SIDで直接指定不可
+    if constrained_path != shortest_path:
+        # 迂回路のセグメントリストを構築し追記
+        segmentlist += retour(src, dst, info_graph, constrained_path, lsalist)
+    else:
+        # 直接Node SIDを追加
+        segmentlist.append(lsalist[dst][0])
+
+    return segmentlist
+
+
+def path_verification(src, via, info_graph, policy, lsalist):
+    '''Verify path'''
+
+    segmentlist = []
+    via.insert(0, src)
+
     # パスを経由ごとに分解し経路計算
-    for i in range(len(via)):
-        # 制約付き，制約なしを計算し比較
-        constrained_path = cspf_dijkstra(src, via[i], info_graph, policy)
+    for i in range(len(via)-1):
+        # 経由地までの制約付きパスを計算
+        constrained_path = cspf_dijkstra(via[i], via[i+1], info_graph, policy)
+
+        # 到達不能の処理
         if constrained_path == 'inf':
             return None, 'Unreachable'
 
-        # next hopを記録
+        # srcのnext hopを記録
         if i == 0:
             for j in lsalist[constrained_path[1]][1].values():
                 if j[0] in lsalist[constrained_path[0]][1]:
                     nexthop = j[0]
 
-        # 前からサーチ，制約付き最短経路にサブドメイン超えが含まれていた場合
-        for j in range(len(constrained_path)-1):
-            if isinterdomain(constrained_path[j], constrained_path[j+1]):
-                # それ以前とそれ以降に分割し，以前を処理
-
-                # サブドメイン越えを付加
-
-                # 以降をまたサブドメイン越え無いかそれぞれ処理
+        # 経由地までのセグメントリストを構築
+        segmentlist += create_segmentlist(via[i], via[i+1], info_graph, lsalist, constrained_path)
 
 
-        shortest_path = dijkstra(src, via[i], info_graph)
+    # if head is nexthop's Node SID, remove it.
+    for i in info_graph:
+        if i[0] == src:
+            if segmentlist[0] == lsalist[i[1]][0]:
+                segmentlist.pop(0)
+                break
 
-        # 制約付き最短経路が最短経路と異なる場合はNode SIDで直接指定不可
-        if constrained_path != shortest_path:
-            # 迂回路のセグメントリストを構築し追記
-            segmentlist += retour(src, via[i],
-                                  info_graph, constrained_path, lsalist)
-        else:
-            # 直接Node SIDを追加
-            segmentlist.append(lsalist[via[i]][0])
-
-
-    # remove first SID is nexthop Node or Adjacency SID, remove it
-    if lsalist[segmentlist[0]] == nexthop or lsalist[segmentlist[0]] == nexthop:
-        segmentlist.pop(0)
+        elif i[1] == src:
+            if segmentlist[0] == lsalist[i[0]][0]:
+                segmentlist.pop(0)
+                break
 
     # convert segmentlist format [16000, 16001] to '16000/16001'
     segmentlist_stack = ''
@@ -230,6 +288,9 @@ def path_verification(src, via, info_graph, policy, lsalist):
         segmentlist_stack += str(segmentlist[i])
         if i != len(segmentlist)-1:
             segmentlist_stack += '/'
+
+    if segmentlist_stack == '':
+        segmentlist_stack = 'Unreachable'
 
     return nexthop, segmentlist_stack
 
